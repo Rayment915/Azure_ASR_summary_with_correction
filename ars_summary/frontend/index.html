@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>长会议纪要上传页</title>
+  <style>
+    :root { color-scheme: light; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #182230; background: #f6f8fb; }
+    body { margin: 0; }
+    main { max-width: 860px; padding: 32px 20px 64px; margin: 0 auto; }
+    h1 { margin: 0 0 8px; font-size: 28px; }
+    .intro { color: #586174; margin: 0 0 24px; line-height: 1.6; }
+    section { background: #fff; border: 1px solid #e3e8ef; border-radius: 12px; padding: 20px; margin: 16px 0; box-shadow: 0 1px 2px rgb(0 0 0 / 3%); }
+    h2 { font-size: 18px; margin: 0 0 14px; }
+    label { display: block; font-size: 14px; font-weight: 600; margin: 14px 0 6px; }
+    input, select, textarea, button { font: inherit; box-sizing: border-box; }
+    input[type="text"], input[type="url"], input[type="password"], select, textarea { width: 100%; border: 1px solid #cbd5e1; border-radius: 8px; padding: 10px 12px; background: #fff; }
+    textarea { min-height: 100px; resize: vertical; }
+    input:focus, select:focus, textarea:focus { outline: 2px solid #76a9fa; outline-offset: 1px; border-color: #4f8df7; }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+    .speaker { display: grid; grid-template-columns: 120px 1fr; align-items: center; gap: 12px; margin: 10px 0; }
+    .speaker code { color: #475569; }
+    .hint, .status { margin: 8px 0 0; font-size: 13px; color: #64748b; line-height: 1.5; }
+    .status.error { color: #b42318; }
+    .status.success { color: #067647; }
+    .hidden { display: none; }
+    button { border: 0; border-radius: 8px; padding: 11px 16px; cursor: pointer; background: #1468e8; color: white; font-weight: 700; margin-top: 18px; }
+    button:hover { background: #0d57c7; }
+    button:disabled { cursor: wait; opacity: .65; }
+    .minutes { color: #253247; background: #fff; border: 1px solid #e3e8ef; border-radius: 12px; padding: 28px; line-height: 1.8; overflow-wrap: anywhere; }
+    .minutes h2 { color: #162034; font-size: 22px; margin: 30px 0 12px; padding-bottom: 8px; border-bottom: 1px solid #e7edf5; }
+    .minutes h2:first-child { margin-top: 0; }
+    .minutes h3 { color: #263b58; font-size: 17px; margin: 22px 0 8px; }
+    .minutes p { margin: 10px 0; }
+    .minutes ul { margin: 10px 0; padding-left: 24px; }
+    .minutes li { margin: 7px 0; }
+    .minutes hr { border: 0; border-top: 1px solid #e4eaf2; margin: 26px 0; }
+    .minutes strong { color: #172554; }
+    .minutes details { margin: 14px 0; border: 1px solid #dce7f5; border-radius: 10px; background: #f8fbff; overflow: hidden; }
+    .minutes summary { cursor: pointer; padding: 14px 16px; color: #1e3a5f; line-height: 1.65; background: #edf5ff; }
+    .minutes details > div { padding: 4px 16px 12px; }
+    .minutes .empty-output { color: #b42318; }
+    details { margin-top: 12px; color: #475569; }
+    @media (max-width: 620px) { .grid { grid-template-columns: 1fr; } .speaker { grid-template-columns: 1fr; gap: 4px; } }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>长会议纪要</h1>
+    <p class="intro">先在本机读取 Azure Speech ASR JSON，识别说话人后填写映射；仅在点击“生成纪要”时才将 JSON 文本发送到 Dify。</p>
+
+    <section>
+      <h2>1. 本地上传转写 JSON</h2>
+      <label for="transcriptFile">Azure Speech ASR JSON 文件</label>
+      <input id="transcriptFile" type="file" accept="application/json,.json" />
+      <p id="transcriptStatus" class="status">请选择 JSON 文件。上传后将自动识别 speaker。</p>
+      <div id="speakerPanel" class="hidden">
+        <h2 style="margin-top:22px">2. 映射说话人姓名</h2>
+        <p class="hint">系统按 `speaker.id` 去重。请为每位说话人确认显示名称；保留默认值也可以。</p>
+        <div id="speakerFields"></div>
+      </div>
+    </section>
+
+    <section>
+      <h2>3. 纪要设置</h2>
+      <label for="meetingTemplate">会议模板</label>
+      <select id="meetingTemplate">
+        <option value="标准三段式纪要" selected>标准三段式纪要（摘要 / 可折叠会议笔记 / 后续任务）</option>
+        <option value="通用会议纪要">通用会议纪要</option>
+        <option value="访谈面试复盘">访谈面试复盘</option>
+        <option value="项目周会">项目周会</option>
+      </select>
+      <label for="userContext">补充要求（可选）</label>
+      <textarea id="userContext" placeholder="例如：重点关注风险、责任人及下周计划"></textarea>
+      <label for="materials">会议材料（可选，PPT / PDF / DOCX）</label>
+      <input id="materials" type="file" accept=".pdf,.pptx,.docx,application/pdf,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/vnd.openxmlformats-officedocument.wordprocessingml.document" multiple />
+      <label for="requestUser">用户标识（可选）</label>
+      <input id="requestUser" type="text" value="" placeholder="可填登录用户名或员工编号" />
+      <p class="hint">页面通过同域 Nginx 代理访问 Dify 与私有 MarkItDown。单份材料转换失败时仍会继续生成纪要。</p>
+      <button id="submitButton" type="button">生成纪要</button>
+      <p id="runStatus" class="status" aria-live="polite"></p>
+    </section>
+
+    <section id="resultPanel" class="hidden">
+      <h2>生成结果</h2>
+      <article id="result" class="minutes"></article>
+    </section>
+  </main>
+
+  <script>
+    let transcriptText = '';
+    let speakerRecords = [];
+    const $ = (id) => document.getElementById(id);
+
+    function showStatus(id, message, type = '') {
+      const element = $(id);
+      element.textContent = message;
+      element.className = `status ${type}`;
+    }
+
+    function displayName(speaker) {
+      return String(speaker?.name || `说话人${speaker?.id || 'unknown'}`).trim() || `说话人${speaker?.id || 'unknown'}`;
+    }
+
+    function parseTranscript(content) {
+      const items = JSON.parse(content);
+      if (!Array.isArray(items)) throw new Error('JSON 顶层必须是数组。');
+      const speakers = new Map();
+      let validSentences = 0;
+      for (const item of items) {
+        if (!item || typeof item !== 'object') continue;
+        const contentText = String(item.content || '').trim();
+        const speakerId = item.speaker?.id;
+        if (!contentText || speakerId === undefined || speakerId === null) continue;
+        validSentences += 1;
+        const id = String(speakerId);
+        if (!speakers.has(id)) speakers.set(id, { id, name: displayName(item.speaker) });
+      }
+      if (!validSentences) throw new Error('未找到有效句子。每项至少需要非空 content 与 speaker.id。');
+      if (!speakers.size) throw new Error('未识别到任何 speaker.id。');
+      return { speakers: [...speakers.values()], validSentences };
+    }
+
+    function renderSpeakers() {
+      const fields = $('speakerFields');
+      fields.replaceChildren();
+      for (const speaker of speakerRecords) {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'speaker';
+        const label = document.createElement('label');
+        label.htmlFor = `speaker-${speaker.id}`;
+        label.innerHTML = `<code>speaker.id: ${speaker.id}</code>`;
+        const input = document.createElement('input');
+        input.id = `speaker-${speaker.id}`;
+        input.type = 'text';
+        input.value = speaker.name;
+        input.dataset.speakerId = speaker.id;
+        input.placeholder = `说话人${speaker.id}`;
+        wrapper.append(label, input);
+        fields.append(wrapper);
+      }
+      $('speakerPanel').classList.remove('hidden');
+    }
+
+    $('transcriptFile').addEventListener('change', async (event) => {
+      $('speakerPanel').classList.add('hidden');
+      transcriptText = '';
+      speakerRecords = [];
+      const file = event.target.files?.[0];
+      if (!file) return showStatus('transcriptStatus', '请选择 JSON 文件。');
+      try {
+        transcriptText = await file.text();
+        const parsed = parseTranscript(transcriptText);
+        speakerRecords = parsed.speakers;
+        renderSpeakers();
+        showStatus('transcriptStatus', `已在本地读取 ${file.name}：${parsed.validSentences} 条有效句子，识别到 ${speakerRecords.length} 位 speaker。`, 'success');
+      } catch (error) {
+        showStatus('transcriptStatus', `无法读取 JSON：${error.message}`, 'error');
+      }
+    });
+
+    function speakerMapping() {
+      const mapping = {};
+      document.querySelectorAll('#speakerFields input[data-speaker-id]').forEach((input) => {
+        mapping[input.dataset.speakerId] = input.value.trim() || `说话人${input.dataset.speakerId}`;
+      });
+      return mapping;
+    }
+
+    function escapeHtml(value) {
+      return String(value)
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#039;');
+    }
+
+    function renderInline(value) {
+      return escapeHtml(value)
+        .replace(/`([^`]+)`/g, '<code>$1</code>')
+        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    }
+
+    function renderDetails(block) {
+      const inner = block.replace(/^\s*<details>\s*/i, '').replace(/\s*<\/details>\s*$/i, '');
+      const summaryMatch = inner.match(/<summary>\s*(?:<strong>([\s\S]*?)<\/strong>)?\s*([\s\S]*?)<\/summary>/i);
+      if (!summaryMatch) return `<div class="empty-output">${escapeHtml(block)}</div>`;
+      const title = summaryMatch[1] ? `<strong>${renderInline(summaryMatch[1])}</strong>` : '';
+      const description = renderInline(summaryMatch[2].trim());
+      const content = inner.replace(summaryMatch[0], '').trim();
+      return `<details open><summary>${title}${title && description ? ' ' : ''}${description}</summary><div>${renderMarkdown(content)}</div></details>`;
+    }
+
+    function renderMarkdown(markdown) {
+      const lines = String(markdown || '').replace(/\r\n?/g, '\n').split('\n');
+      const html = [];
+      let index = 0;
+      while (index < lines.length) {
+        const line = lines[index];
+        if (!line.trim()) { index += 1; continue; }
+        if (/^\s*<details>\s*$/i.test(line)) {
+          const detailLines = [line];
+          index += 1;
+          while (index < lines.length) {
+            detailLines.push(lines[index]);
+            if (/^\s*<\/details>\s*$/i.test(lines[index])) { index += 1; break; }
+            index += 1;
+          }
+          html.push(renderDetails(detailLines.join('\n')));
+          continue;
+        }
+        const heading = line.match(/^(#{2,3})\s+(.+)$/);
+        if (heading) {
+          const level = heading[1].length;
+          html.push(`<h${level}>${renderInline(heading[2])}</h${level}>`);
+          index += 1;
+          continue;
+        }
+        if (/^\s*(---+|___+)\s*$/.test(line)) {
+          html.push('<hr>');
+          index += 1;
+          continue;
+        }
+        if (/^\s*-\s+/.test(line)) {
+          const items = [];
+          while (index < lines.length && /^\s*-\s+/.test(lines[index])) {
+            items.push(`<li>${renderInline(lines[index].replace(/^\s*-\s+/, ''))}</li>`);
+            index += 1;
+          }
+          html.push(`<ul>${items.join('')}</ul>`);
+          continue;
+        }
+        const paragraph = [line.trim()];
+        index += 1;
+        while (index < lines.length && lines[index].trim() && !/^(#{2,3})\s+/.test(lines[index]) && !/^\s*(<details>|<\/details>|-\s+|---+|___+)/i.test(lines[index])) {
+          paragraph.push(lines[index].trim());
+          index += 1;
+        }
+        html.push(`<p>${renderInline(paragraph.join(' '))}</p>`);
+      }
+      return html.join('');
+    }
+
+    async function convertMaterials() {
+      const files = [...$('materials').files];
+      if (!files.length) return { markdown: '', failures: [] };
+      const parts = [];
+      const failures = [];
+      for (const file of files) {
+        const form = new FormData();
+        form.append('file', file);
+        try {
+          const response = await fetch('/markitdown/v1/convert', { method: 'POST', body: form });
+          const body = await response.json().catch(() => ({}));
+          if (!response.ok) throw new Error(body.detail || `HTTP ${response.status}`);
+          parts.push(`## 会议材料：${body.filename || file.name}\n\n${body.markdown || ''}\n\n---`);
+        } catch (error) {
+          failures.push(`${file.name}: ${error.message}`);
+        }
+      }
+      return { markdown: parts.join('\n\n'), failures };
+    }
+
+    $('submitButton').addEventListener('click', async () => {
+      const button = $('submitButton');
+      if (!transcriptText || !speakerRecords.length) return showStatus('runStatus', '请先上传并解析转写 JSON。', 'error');
+      button.disabled = true;
+      $('resultPanel').classList.add('hidden');
+      try {
+        showStatus('runStatus', '正在转换会议材料…');
+        const materialResult = await convertMaterials();
+        showStatus('runStatus', materialResult.failures.length ? `部分材料转换失败，将继续生成纪要：${materialResult.failures.join('；')}` : '正在提交 Dify 工作流…');
+        const response = await fetch('/dify-api/v1/workflows/run', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            inputs: {
+              transcript_json: transcriptText,
+              speaker_mapping_json: JSON.stringify(speakerMapping()),
+              material_markdown: materialResult.markdown,
+              meeting_template: $('meetingTemplate').value,
+              user_context: $('userContext').value.trim(),
+            },
+            response_mode: 'blocking',
+            user: $('requestUser').value.trim() || 'meeting-web-user',
+          }),
+        });
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(body.message || body.detail || `Dify 请求失败（HTTP ${response.status}）`);
+        const outputs = body.data?.outputs || {};
+        const fallbackText = Object.values(outputs).find((value) => typeof value === 'string' && value.trim());
+        const minutes = outputs.final_minutes || outputs.text || fallbackText;
+        if (!minutes) {
+          console.error('Dify workflow response did not include a text output.', body);
+          $('result').innerHTML = `<pre>${escapeHtml(JSON.stringify({
+            message: 'Dify 已执行，但 End 节点未返回可显示的文本输出。',
+            outputKeys: Object.keys(outputs),
+            response: body,
+          }, null, 2))}</pre>`;
+          $('resultPanel').classList.remove('hidden');
+          throw new Error(`Dify 未返回可显示纪要。End 输出键：${Object.keys(outputs).join(', ') || '无'}`);
+        }
+        $('result').innerHTML = renderMarkdown(minutes);
+        $('resultPanel').classList.remove('hidden');
+        showStatus('runStatus', materialResult.failures.length ? `纪要生成完成；部分材料提示：${materialResult.failures.join('；')}` : '纪要生成完成。', 'success');
+      } catch (error) {
+        showStatus('runStatus', `生成失败：${error.message}`, 'error');
+      } finally {
+        button.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>

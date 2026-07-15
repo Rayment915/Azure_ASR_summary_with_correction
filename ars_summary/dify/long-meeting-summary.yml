@@ -1,0 +1,587 @@
+app:
+  description: 将 Azure Speech 多说话人转写、可选会议材料和用户要求整理为可审阅的长会议纪要。
+  icon: "\U0001F4DD"
+  icon_background: "#D1F4E0"
+  mode: workflow
+  name: 长会议纪要（Azure Speech JSON）
+  use_icon_as_answer_icon: false
+kind: app
+version: 0.1.5
+workflow:
+  conversation_variables: []
+  environment_variables: []
+  features:
+    file_upload:
+      enabled: false
+    opening_statement: ''
+    retriever_resource:
+      enabled: false
+    sensitive_word_avoidance:
+      enabled: false
+  graph:
+    edges:
+    - id: start-normalize
+      source: start
+      sourceHandle: source
+      target: normalize
+      targetHandle: target
+      type: custom
+      zIndex: 0
+      data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: start
+        targetType: code
+    - id: split-iterate
+      source: split-transcript
+      sourceHandle: source
+      target: chunk-iteration
+      targetHandle: target
+      type: custom
+      zIndex: 0
+      data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: code
+        targetType: iteration
+    - id: iterate-final
+      source: chunk-iteration
+      sourceHandle: source
+      target: final-minutes
+      targetHandle: target
+      type: custom
+      zIndex: 0
+      data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: iteration
+        targetType: llm
+    - id: final-end
+      source: final-minutes
+      sourceHandle: source
+      target: end
+      targetHandle: target
+      type: custom
+      zIndex: 0
+      data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: llm
+        targetType: end
+    - id: chunk-iteration-start-source-chunk-llm-target
+      source: chunk-iteration-start
+      sourceHandle: source
+      target: chunk-llm
+      targetHandle: target
+      type: custom
+      zIndex: 1002
+      data:
+        isInIteration: true
+        isInLoop: false
+        iteration_id: chunk-iteration
+        sourceType: iteration-start
+        targetType: llm
+    - id: normalize-terminology
+      source: normalize
+      sourceHandle: source
+      target: terminology
+      targetHandle: target
+      type: custom
+      zIndex: 0
+      data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: code
+        targetType: llm
+    - id: terminology-split
+      source: terminology
+      sourceHandle: source
+      target: split-transcript
+      targetHandle: target
+      type: custom
+      zIndex: 0
+      data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: llm
+        targetType: code
+    nodes:
+    - id: start
+      type: custom
+      position:
+        x: 30
+        y: 260
+      positionAbsolute:
+        x: 30
+        y: 260
+      width: 244
+      height: 252
+      data:
+        type: start
+        title: 开始
+        desc: 由外部上传页传入标准化字段。
+        selected: false
+        variables:
+        - variable: transcript_json
+          label: Azure Speech 转写 JSON
+          type: paragraph
+          required: true
+          max_length: 3000000
+          options: []
+        - variable: speaker_mapping_json
+          label: 说话人映射 JSON
+          type: paragraph
+          required: true
+          max_length: 50000
+          options: []
+        - variable: material_markdown
+          label: 会议材料 Markdown
+          type: paragraph
+          required: false
+          max_length: 1000000
+          options: []
+        - variable: meeting_template
+          label: 纪要模板
+          type: select
+          required: true
+          max_length: 48
+          options:
+          - 标准三段式纪要
+          - 通用会议纪要
+          - 访谈面试复盘
+          - 项目周会
+        - variable: user_context
+          label: 补充要求
+          type: paragraph
+          required: false
+          max_length: 20000
+          options: []
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+    - id: normalize
+      type: custom
+      position:
+        x: 330
+        y: 260
+      positionAbsolute:
+        x: 330
+        y: 260
+      width: 244
+      height: 154
+      data:
+        type: code
+        title: 校验并标准化转写
+        desc: 校验 Azure Speech 顶层数组，映射说话人并生成时间戳逐字稿。
+        code_language: python3
+        variables:
+        - variable: transcript_json
+          value_selector:
+          - start
+          - transcript_json
+        - variable: speaker_mapping_json
+          value_selector:
+          - start
+          - speaker_mapping_json
+        - variable: material_markdown
+          value_selector:
+          - start
+          - material_markdown
+        outputs:
+          normalized_transcript:
+            type: string
+            children: 
+          meeting_metadata:
+            type: string
+            children: 
+        code: |
+          import json
+
+          def to_hms(milliseconds):
+              total_seconds = max(0, int(float(milliseconds) / 1000))
+              hours, remainder = divmod(total_seconds, 3600)
+              minutes, seconds = divmod(remainder, 60)
+              return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+          def main(transcript_json, speaker_mapping_json, material_markdown):
+              try:
+                  items = json.loads(transcript_json)
+              except Exception as error:
+                  raise ValueError(f"transcript_json 不是有效 JSON：{error}")
+              if not isinstance(items, list):
+                  raise ValueError("transcript_json 必须是 Azure Speech 句子对象组成的顶层数组")
+              try:
+                  mapping = json.loads(speaker_mapping_json or "{}")
+              except Exception as error:
+                  raise ValueError(f"speaker_mapping_json 不是有效 JSON：{error}")
+              if not isinstance(mapping, dict):
+                  raise ValueError("speaker_mapping_json 必须是 JSON 对象，例如 {\\\"1\\\":\\\"面试官\\\"}")
+
+              normalized = []
+              speakers = {}
+              invalid_count = 0
+              for index, item in enumerate(items):
+                  if not isinstance(item, dict):
+                      invalid_count += 1
+                      continue
+                  content = str(item.get("content") or "").strip()
+                  speaker = item.get("speaker") or {}
+                  speaker_id = str(speaker.get("id") or "unknown")
+                  start_time = item.get("start_time")
+                  end_time = item.get("end_time")
+                  if not content or start_time is None or end_time is None:
+                      invalid_count += 1
+                      continue
+                  try:
+                      start_time = float(start_time)
+                      end_time = float(end_time)
+                  except (TypeError, ValueError):
+                      invalid_count += 1
+                      continue
+                  if start_time < 0 or end_time < start_time:
+                      invalid_count += 1
+                      continue
+                  source_name = str(speaker.get("name") or f"说话人{speaker_id}").strip()
+                  display_name = str(mapping.get(speaker_id) or source_name or f"说话人{speaker_id}").strip()
+                  speakers[speaker_id] = display_name
+                  normalized.append((start_time, end_time, index, display_name, content))
+
+              if not normalized:
+                  raise ValueError("未找到有效句子；每项必须含非空 content、start_time、end_time 和 speaker.id")
+              normalized.sort(key=lambda row: (row[0], row[2]))
+              transcript = "\n".join(
+                  f"[{to_hms(start)}] {name}：{content}"
+                  for start, _, _, name, content in normalized
+              )
+              metadata = {
+                  "sentence_count": len(normalized),
+                  "skipped_invalid_records": invalid_count,
+                  "speaker_mapping": speakers,
+                  "start_time": to_hms(normalized[0][0]),
+                  "end_time": to_hms(normalized[-1][1]),
+                  "duration_minutes": round((normalized[-1][1] - normalized[0][0]) / 60000, 2),
+              }
+              return {
+                  "normalized_transcript": transcript,
+                  "meeting_metadata": json.dumps(metadata, ensure_ascii=False),
+              }
+        selected: false
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+    - id: terminology
+      type: custom
+      position:
+        x: 940
+        y: 130
+      positionAbsolute:
+        x: 940
+        y: 130
+      width: 244
+      height: 154
+      data:
+        type: llm
+        title: 材料术语提取（无材料则空词表）
+        desc: 有材料时抽取术语；材料为空时返回确定的空词表。
+        context:
+          enabled: false
+          variable_selector: []
+        model:
+          provider: azure_openai
+          name: gpt-5.4
+          mode: chat
+          completion_params:
+            temperature: 0.1
+            max_tokens: 3500
+        prompt_template:
+        - role: system
+          text: |
+            你是会议材料术语校对助手。根据“会议材料 Markdown”生成可用于 ASR 纠错的紧凑词表。
+            - 如果会议材料为空、仅含空白，或明确表示未提供材料：必须且只能输出 `（未提供会议材料；不得据此补充或纠正专有名词。）`，不要添加解释。
+            - 如果有材料：只依据材料抽取可用于 ASR 纠错的专有信息，绝不补全或猜测。输出紧凑 Markdown，固定分为：专有名词与缩写、人员与组织、产品项目与版本、数字与关键事实。每项写“标准写法｜别名或上下文（如有）”。保留材料证据中的精确大小写、数字与单位。不要总结会议，也不要输出无关解释。
+        - role: user
+          text: |-
+            会议材料 Markdown：
+            {{#start.material_markdown#}}
+        vision:
+          enabled: false
+        selected: false
+        variables: []
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+    - id: split-transcript
+      type: custom
+      position:
+        x: 1560
+        y: 260
+      positionAbsolute:
+        x: 1560
+        y: 260
+      width: 244
+      height: 154
+      data:
+        type: code
+        title: 切分逐字稿
+        desc: 约 9,000 字符按句子边界切分，块间保留尾部上下文。
+        code_language: python3
+        variables:
+        - variable: normalized_transcript
+          value_selector:
+          - normalize
+          - normalized_transcript
+        outputs:
+          chunks:
+            type: array[string]
+            children: 
+        code: |
+          def main(normalized_transcript):
+              target_size = 9000
+              overlap_size = 700
+              lines = [line for line in normalized_transcript.splitlines() if line.strip()]
+              chunks, current, current_size = [], [], 0
+              for line in lines:
+                  line_size = len(line) + 1
+                  if current and current_size + line_size > target_size:
+                      chunks.append("\n".join(current))
+                      overlap, overlap_count = [], 0
+                      for previous in reversed(current):
+                          overlap.insert(0, previous)
+                          overlap_count += len(previous) + 1
+                          if overlap_count >= overlap_size:
+                              break
+                      current = overlap
+                      current_size = sum(len(item) + 1 for item in current)
+                  current.append(line)
+                  current_size += line_size
+              if current:
+                  chunks.append("\n".join(current))
+              return {"chunks": chunks}
+        selected: false
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+    - id: chunk-iteration
+      type: custom
+      position:
+        x: 1870
+        y: 260
+      positionAbsolute:
+        x: 1870
+        y: 260
+      width: 388
+      height: 178
+      data:
+        type: iteration
+        title: 分块事实抽取
+        desc: 逐块纠错并抽取可合并的事实；Iteration 保留每块输出。
+        iterator_selector:
+        - split-transcript
+        - chunks
+        output_selector:
+        - chunk-llm
+        - text
+        output_type: array[string]
+        start_node_id: chunk-iteration-start
+        height: 178
+        width: 388
+        is_parallel: false
+        parallel_nums: 10
+        error_handle_mode: terminated
+        flatten_output: true
+        iterator_input_type: array[string]
+        _children:
+        - nodeId: chunk-iteration-start
+          nodeType: iteration-start
+        - nodeId: chunk-llm
+          nodeType: llm
+        selected: false
+      zIndex: 1
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+    - id: final-minutes
+      type: custom
+      position:
+        x: 2400
+        y: 260
+      positionAbsolute:
+        x: 2400
+        y: 260
+      width: 244
+      height: 154
+      data:
+        type: llm
+        title: 最终纪要
+        desc: 合并分块事实，按模板输出最终 Markdown。
+        context:
+          enabled: false
+          variable_selector: []
+        model:
+          provider: azure_openai
+          name: gpt-5.4
+          mode: chat
+          completion_params:
+            temperature: 0.15
+            max_tokens: 7000
+        prompt_template:
+        - role: system
+          text: |
+            你是专业会议纪要编辑。仅以“块级事实”作为会议事实来源，使用术语词表统一写法。对重叠片段导致的重复内容按主题、任务、时间去重；不要新增原文没有的结论、责任人、时间或期限。无法确认的信息标记“待确认”。
+
+            当模板为“标准三段式纪要”时，必须严格执行以下规则：
+            - 输出仅包含、且依次包含 `## 摘要`、`## 会议笔记`、`## 后续任务` 三块；如需声明，全文最后单独一行添加 `(注:文档部分内容可能由 AI 生成)`。
+            - `## 摘要`：用一个 80–150 字的连贯段落写 3–5 句，不使用列表；涵盖会议场景/目的、2–3 个核心议题、关键结论或方向、主要后续动作，不能编造。
+            - `## 会议笔记`：输出 3–5 个重点，通常 4 个。每个重点必须使用以下 HTML Markdown 可折叠结构：
+              `<details>`
+              `<summary><strong>主题标题:</strong> 1–3 句概述</summary>`
+
+              `- **子题标题:** 完整详述`
+              `</details>`
+              主题标题和子题标题必须有具体业务信息、约 8–12 个汉字、遮住正文后仍知道议题；不可只写“背景、结论、风险、下一步、方案现状、工具能力、岗位动机”等空泛分类词。标题只点题，动作、原因、数字、状态写在冒号后的正文。每个重点通常 3–5 个自由命名的子点，不能套固定字段模板。删除口头禅和重复表述，保留专名、指标和状态差异。
+            - `## 后续任务`：用列表而非表格。每项格式为 `- **任务主题:** 具体要做什么的完整描述 (负责人1, 负责人2)`；任务主题约 8–12 个汉字且有议题信息。负责人未明确写 `(待定)`，不可编造负责人或截止日期。仅收录明确或强暗示需要跟进的事项；没有则写 `本次会议未明确后续任务`。
+
+            当模板为“通用会议纪要”时：输出 `## 摘要`、`## 核心议题`、`## 结论与决策`、`## 风险与待确认项`，仅在原文存在明确事项时输出 `## 待办事项`；最后添加 AI 声明。
+            当模板为“访谈面试复盘”时：输出 `## 摘要`、`## 候选人背景`、`## 问题与回答要点`、`## 能力证据`、`## 追问点与风险`，仅在原文存在时输出 `## 后续动作`；绝不擅自给出录用/淘汰结论；最后添加 AI 声明。
+            当模板为“项目周会”时：输出 `## 摘要`、`## 项目状态`、`## 已完成`、`## 进行中`、`## 阻塞项与风险`，仅在原文存在时输出 `## 待办事项`；最后添加 AI 声明。
+        - role: user
+          text: |
+            模板：{{#start.meeting_template#}}
+            用户补充要求：{{#start.user_context#}}
+            会议元数据：{{#normalize.meeting_metadata#}}
+            术语词表：
+            {{#terminology.text#}}
+
+            块级事实（按时间顺序）：
+            {{#chunk-iteration.output#}}
+        vision:
+          enabled: false
+        selected: false
+        variables: []
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+    - id: end
+      type: custom
+      position:
+        x: 2700
+        y: 260
+      positionAbsolute:
+        x: 2700
+        y: 260
+      width: 244
+      height: 136
+      data:
+        type: end
+        title: 输出
+        desc: 返回成稿、可审阅逐字稿、术语词表和元数据。
+        outputs:
+        - variable: final_minutes
+          value_selector:
+          - final-minutes
+          - text
+          value_type: string
+        - variable: normalized_transcript
+          value_selector:
+          - normalize
+          - normalized_transcript
+          value_type: string
+        - variable: terminology_glossary
+          value_selector:
+          - terminology
+          - text
+          value_type: string
+        - variable: meeting_metadata
+          value_selector:
+          - normalize
+          - meeting_metadata
+          value_type: string
+        selected: false
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+    - id: chunk-iteration-start
+      type: custom-iteration-start
+      position:
+        x: 24
+        y: 68
+      positionAbsolute:
+        x: 1894
+        y: 328
+      width: 44
+      height: 48
+      data:
+        type: iteration-start
+        title: ''
+        desc: ''
+        selected: false
+        isInIteration: true
+      parentId: chunk-iteration
+      draggable: false
+      selectable: false
+      zIndex: 1002
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+    - id: chunk-llm
+      type: custom
+      position:
+        x: 128
+        y: 68
+      positionAbsolute:
+        x: 1998
+        y: 328
+      width: 244
+      height: 154
+      data:
+        type: llm
+        title: 分块事实抽取
+        desc: ''
+        context:
+          enabled: false
+          variable_selector: []
+        model:
+          provider: azure_openai
+          name: gpt-5.4
+          mode: chat
+          completion_params:
+            temperature: 0.1
+            max_tokens: 4000
+        prompt_template:
+        - role: system
+          text: |
+            你是严谨的会议分析器。给定一个连续转写片段，先在心中根据术语词表校正明显的 ASR 专名误识别；仅在材料明确支持时校正，无法确认则保留原词并标记“待确认”。
+            只抽取原文明确表达的内容，不把建议、假设、个人意见或追问当成已决定事项。输出 Markdown，使用以下固定小节：
+            ## 讨论主题
+            ## 已确认结论与证据时间
+            ## 方案、观点与争议
+            ## 行动项（任务｜负责人｜截止时间｜证据时间；未明确则写待定）
+            ## 风险与待确认
+            ## 专名纠错记录（原词→标准词｜材料依据；仅列实际纠错）
+            每项简洁、可与其他块去重。若某类无信息，写“无”。
+        - role: user
+          text: |
+            纪要模板：{{#start.meeting_template#}}
+            用户补充要求：{{#start.user_context#}}
+            术语与事实词表：
+            {{#terminology.text#}}
+
+            当前逐字稿片段：
+            {{#chunk-iteration.item#}}
+        vision:
+          enabled: false
+        selected: false
+        isInIteration: true
+        isInLoop: false
+        iteration_id: chunk-iteration
+        variables: []
+      parentId: chunk-iteration
+      zIndex: 1002
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+    viewport:
+      x: 0
+      y: 0
+      zoom: 0.5
+dependencies: []
